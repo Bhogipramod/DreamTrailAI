@@ -1,4 +1,4 @@
-export type Pace = "relaxed" | "balanced" | "packed";
+export type Pace = "relaxed" | "balanced" | "packed" | "active";
 export type StoryStyle = "cinematic" | "fantasy" | "watercolor" | "documentary" | "animation";
 
 export interface TripRequest {
@@ -15,12 +15,76 @@ export interface TripRequest {
   story_style: StoryStyle;
 }
 
+export interface PreferenceSummary {
+  emotional_intent: string;
+  themes: string[];
+  pace: Pace;
+}
+
+export interface Destination {
+  name: string;
+  country: string;
+  rationale: string;
+  estimated_fit: string;
+}
+
+export interface ItineraryItem {
+  time_of_day: string;
+  title: string;
+  description: string;
+  category: string;
+  rationale: string;
+  estimated_cost: number;
+  photo_moment: string;
+}
+
+export interface ItineraryDay {
+  day: number;
+  theme: string;
+  items: ItineraryItem[];
+  estimated_daily_cost: number;
+}
+
+export interface BudgetLineItem {
+  category: string;
+  amount: number;
+}
+
+export interface Optimization {
+  title: string;
+  estimated_saving: number;
+  impact: string;
+}
+
+export interface BudgetPlan {
+  currency: string;
+  user_budget: number;
+  estimated_total: number;
+  variance: number;
+  line_items: BudgetLineItem[];
+  assumptions: string[];
+  optimizations: Optimization[];
+}
+
+export interface Story {
+  style: string;
+  title: string;
+  content: string;
+  disclaimer: string;
+}
+
 export interface TripPlan {
-  trip_id: string;
-  preference_summary: { emotional_intent: string; themes: string[]; pace: Pace };
-  destination: { name: string; country: string; rationale: string; estimated_fit: string };
-  itinerary: Array<{ day: number; theme: string; estimated_daily_cost: number; items: Array<{ time_of_day: string; title: string; description: string; category: string; rationale: string; estimated_cost: number; photo_moment: string }> }>;
-  budget: { currency: string; user_budget: number; estimated_total: number; variance: number; line_items: Array<{ category: string; amount: number }>; assumptions: string[]; optimizations: Array<{ title: string; estimated_saving: number; impact: string }> };
-  story: { style: StoryStyle; title: string; content: string; disclaimer: string };
-  generation_mode: string;
+  id: string;
+  preference_summary: PreferenceSummary;
+  destination: Destination;
+  itinerary: ItineraryDay[];
+  budget: BudgetPlan;
+  story: Story;
+}
+
+export interface SavedTripListItem {
+  id: string;
+  destination_name: string;
+  country: string;
+  duration_days: number;
 }
