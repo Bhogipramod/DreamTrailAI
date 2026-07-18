@@ -31,8 +31,6 @@ export const StoryView: React.FC<StoryViewProps> = ({ tripId, story, onRegenerat
             <p className="text-xs text-emerald-400 uppercase font-semibold tracking-widest mt-0.5">Labelled Narrative Engine</p>
           </div>
         </div>
-        
-        {/* Style Chooser Dropdown */}
         <div className="flex items-center gap-2">
           <label className="text-xs text-slate-400 whitespace-nowrap">Change Tone:</label>
           <select

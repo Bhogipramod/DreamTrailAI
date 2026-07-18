@@ -1,7 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.models import Pace, RevisionRequest, TripPlan, TripRequest
+from app.models import Pace, RevisionRequest, Story, StoryRequest, TripPlan, TripRequest
 from app.services.trip_provider import get_trip_provider
 
 app = FastAPI(title="MemoryTrip API", version="0.1.0")
@@ -17,12 +17,15 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "provider": "mock"}
+    return {"status": "ok", "provider": get_trip_provider().generation_mode}
 
 
 @app.post("/api/trips/generate", response_model=TripPlan)
 def generate_trip(request: TripRequest) -> TripPlan:
-    return get_trip_provider().generate(request)
+    try:
+        return get_trip_provider().generate(request)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
 @app.post("/api/trips/revise", response_model=TripPlan)
@@ -33,6 +36,26 @@ def revise_trip(request: RevisionRequest) -> TripPlan:
         updated.budget = max(1000, int(updated.budget * 0.85))
     if "slow" in instruction or "relax" in instruction:
         updated.pace = Pace.RELAXED
+    if "fast" in instruction or "pack" in instruction:
+        updated.pace = Pace.PACKED
     if "adventure" in instruction:
         updated.interests = ["adventure", *[item for item in updated.interests if item != "adventure"]]
-    return get_trip_provider().generate(updated)
+    if "culture" in instruction:
+        updated.interests = ["culture", *[item for item in updated.interests if item != "culture"]]
+    if "destination" in instruction:
+        updated.destination_scope = "Open to suggestions"
+
+    try:
+        return get_trip_provider().generate(updated)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+
+@app.post("/api/trips/story", response_model=Story)
+def regenerate_story(request: StoryRequest) -> Story:
+    """Regenerates only the story for an already-generated plan, leaving
+    the itinerary/budget the user is looking at untouched client-side."""
+    try:
+        return get_trip_provider().regenerate_story(request.trip, request.style)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc

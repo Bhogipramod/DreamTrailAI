@@ -15,3 +15,35 @@ button { font: inherit; cursor: pointer; } button:disabled { opacity: .65; curso
 .loading p { color: #97a19e; }.loading .active { color: #183d36; font-weight: 700; }.error { background: #fae1dd; color: #8b281a; padding: 14px; border-radius: 10px; }.destination { margin-bottom: 20px; }.destination h2 { font-size: clamp(2.1rem, 5vw, 3.5rem); margin: 8px 0; }.badge { display: inline-block; padding: 7px 10px; border-radius: 100px; background: #e2eee7; color: #185541; font-weight: 700; font-size: .88rem; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }.amount { font-family: Georgia, serif; font-size: 2rem; font-weight: 700; margin: 6px 0; }.day { display: grid; grid-template-columns: 210px 1fr; gap: 22px; padding: 20px 0; border-top: 1px solid #eee6dc; }.day:first-of-type { border-top: 0; }.day p { margin: 5px 0; color: #5b6e68; }.activities { display: grid; gap: 10px; }.activity { background: #f7f4ed; padding: 14px; border-radius: 12px; }.activity small, .story small { color: #63736d; }.activity em { display: block; color: #a15836; margin-top: 7px; font-size: .85rem; }.tip { padding: 12px 0; border-bottom: 1px solid #eee6dc; }.tip:last-child { border-bottom: 0; }.tip span { float: right; color: #18704f; font-weight: 700; font-size: .85rem; }.tip p { margin: 5px 0 0; font-size: .92rem; }.story { background: #173d36; color: #f9f4e9; }.story .eyebrow { color: #f5c19e; }.story small { color: #cad8d1; }.revision-row { display: flex; gap: 8px; margin-top: 14px; }.revision-row input { flex: 1; }
 @media (max-width: 700px) { main { padding: 14px 14px 48px; }.hero { padding: 42px 24px; border-radius: 20px; }.form-grid, .two-col { grid-template-columns: 1fr; }.day { grid-template-columns: 1fr; gap: 8px; }.revision-row { flex-wrap: wrap; }.revision-row input { flex-basis: 100%; }.full { grid-column: auto; } }
+/* ---------------------------------------------------------------
+   App shell background — replaces flat bg-slate-950.
+   Evokes dusk on a journey + a faint winding trail path, using
+   only colors already in the app's palette (emerald / cyan / amber)
+   so it stays consistent with existing cards and accents.
+   Append this block to the end of frontend/src/styles.css.
+   ------------------------------------------------------------- */
+.app-shell {
+  min-height: 100vh;
+  color: #f1f5f9; /* matches text-slate-100 */
+  background-color: #060b12;
+  background-image:
+    /* warm ember glow, lower-right - ties to the amber accents used
+       elsewhere (revise button, photo-moment tags) */
+    radial-gradient(ellipse 900px 600px at 88% 92%, rgba(217, 119, 87, 0.10), transparent 60%),
+    /* cool emerald glow, upper-left - ties to the brand gradient text */
+    radial-gradient(ellipse 800px 700px at 8% 4%, rgba(16, 185, 129, 0.10), transparent 55%),
+    /* faint winding trail path, subtle enough to read as texture, not decoration */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600' viewBox='0 0 600 600'%3E%3Cpath d='M-20 520 C 100 480, 160 560, 260 500 S 420 380, 520 420 S 640 340, 720 300' stroke='%2334d399' stroke-width='2' stroke-dasharray='2 14' stroke-linecap='round' fill='none' opacity='0.35'/%3E%3C/svg%3E"),
+    /* base gradient - deep teal fading to near-black navy, like dusk settling in */
+    linear-gradient(165deg, #0c211d 0%, #060b12 48%, #080d16 100%);
+  background-repeat: no-repeat, no-repeat, repeat, no-repeat;
+  background-size: auto, auto, 600px 600px, auto;
+  background-attachment: fixed, fixed, fixed, fixed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell * {
+    transition: none !important;
+    animation-duration: 0.001ms !important;
+  }
+}

@@ -94,7 +94,9 @@ class Story(BaseModel):
 
 
 class TripPlan(BaseModel):
-    trip_id: str = Field(default_factory=lambda: str(uuid4()))
+    # NOTE: renamed from `trip_id` -> `id` to match the frontend contract
+    # (frontend/src/types.ts TripPlan.id, used throughout App.tsx).
+    id: str = Field(default_factory=lambda: str(uuid4()))
     preference_summary: PreferenceSummary
     destination: Destination
     itinerary: List[ItineraryDay]
@@ -106,3 +108,11 @@ class TripPlan(BaseModel):
 class RevisionRequest(BaseModel):
     trip: TripRequest
     instruction: str = Field(min_length=3, max_length=300)
+
+
+class StoryRequest(BaseModel):
+    """Used by POST /api/trips/story to regenerate only the story,
+    leaving the itinerary/budget the user is already looking at untouched."""
+
+    trip: TripRequest
+    style: StoryStyle

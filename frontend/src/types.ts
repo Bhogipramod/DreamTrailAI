@@ -1,4 +1,4 @@
-export type Pace = "relaxed" | "balanced" | "packed" | "active";
+export type Pace = "relaxed" | "balanced" | "packed";
 export type StoryStyle = "cinematic" | "fantasy" | "watercolor" | "documentary" | "animation";
 
 export interface TripRequest {
@@ -80,11 +80,12 @@ export interface TripPlan {
   itinerary: ItineraryDay[];
   budget: BudgetPlan;
   story: Story;
+  generation_mode: string;
 }
 
-export interface SavedTripListItem {
-  id: string;
-  destination_name: string;
-  country: string;
-  duration_days: number;
+// A trip request + the plan it produced, persisted to sessionStorage so
+// the plan survives a refresh (DEVELOPER_PLAN.md, Developer B task 10).
+export interface PersistedSession {
+  request: TripRequest;
+  plan: TripPlan;
 }
