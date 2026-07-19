@@ -3,13 +3,8 @@
 Two implementations sit behind a common `TripProvider` interface:
 
 - `MockTripProvider`: deterministic, no network calls, reacts to
-  destination scope / duration / budget / pace / interests. This is the
-  default and the only provider needed for MVP1.
-- `OpenAITripProvider`: server-side GPT-5.6 provider, wired up but not
-  activated until `AI_PROVIDER=openai` and `OPENAI_API_KEY` are set. Do not
-  enable in the frontend; the key must never leave the backend.
-
-`get_trip_provider()` is the single entry point `main.py` should use.
+  destination scope / duration / budget / pace / interests. 
+- `AITripProvider`: server-side AI model provider.
 """
 
 from __future__ import annotations
@@ -19,6 +14,17 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
+from dotenv import load_dotenv
+from pathlib import Path
+
+import os
+from functools import lru_cache
+from google import genai
+from google.genai import types
+
+env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+
+load_dotenv(env_path)
 
 from app.models import (
     BudgetLineItem,
@@ -140,7 +146,7 @@ def _pick_destination(request: TripRequest) -> Destination:
                     rationale=candidate["rationale"],
                     estimated_fit=fit,
                 )
-        # Scope given but not recognised: keep the user's wording, mock a rationale.
+        # Scope given but not recognised: keeping the user's wording, mocking a rationale.
         return Destination(
             name=request.destination_scope,
             country="Unspecified",
@@ -167,7 +173,7 @@ def _themes_for(request: TripRequest) -> list[str]:
         Pace.BALANCED: "balanced exploration",
         Pace.PACKED: "high-energy discovery",
     }[request.pace])
-    # de-dupe, keep order, cap at 3 per contract
+    
     seen = []
     for t in themes:
         if t not in seen:
@@ -241,7 +247,7 @@ def _build_itinerary(request: TripRequest, destination: Destination) -> list[Iti
 
 def _build_budget(request: TripRequest, itinerary: list[ItineraryDay]) -> BudgetPlan:
     estimated_total = sum(day.estimated_daily_cost for day in itinerary)
-    # Nudge total to be realistically close to (not always under) budget.
+    
     line_items = [
         BudgetLineItem(category=name, amount=round(estimated_total * weight))
         for name, weight in _BUDGET_CATEGORY_WEIGHTS
@@ -332,45 +338,236 @@ class MockTripProvider(TripProvider):
         preferences = _build_preferences(request)
         return _build_story(destination, preferences, style)
 
+    def revise_trip(
+        self,
+        request: TripRequest,
+        current_plan: TripPlan,
+        instruction: str,
+        ) -> TripPlan:
+        """
+        Mock revision by tweaking the original request based on a few
+        common revision instructions, then regenerating the trip.
+        """
+
+        revised_request = request.model_copy(deep=True)
+
+        text = instruction.lower()
+
+        if "budget" in text or "cheap" in text:
+            revised_request.budget = max(100, int(revised_request.budget * 0.8))
+
+        if "slower" in text or "relaxed" in text:
+            revised_request.pace = Pace.relaxed
+
+        if "faster" in text or "active" in text:
+            revised_request.pace = Pace.active
+
+        if "culture" in text and "culture" not in revised_request.interests:
+            revised_request.interests.append("culture")
+
+        if "adventure" in text and "adventure" not in revised_request.interests:
+            revised_request.interests.append("adventure")
+
+        if "food" in text and "food" not in revised_request.interests:
+            revised_request.interests.append("food")
+
+        return self.generate(revised_request)
 
 # --------------------------------------------------------------------------
-# OpenAI provider — not active until explicitly configured. Keep the API
-# key and prompts server-side only; never import this provider's client
-# construction into a path that can be reached without OPENAI_API_KEY set.
+# AI trip provider 
 # --------------------------------------------------------------------------
 
-MODEL_TARGET = "gpt-5.6-sol"
+MODEL_TARGET = "gemini-3.5-flash"
 
 
-class OpenAITripProvider(TripProvider):
-    generation_mode = "gpt-5.6"
+class GeminiTripProvider(TripProvider):
+    generation_mode = "gemini"
 
     def __init__(self) -> None:
         try:
-            from openai import AsyncOpenAI  # local import: optional dependency
-        except ImportError as exc:  # pragma: no cover
+            from google import genai
+        except ImportError as exc:
             raise RuntimeError(
-                "openai package not installed. Add `openai` to requirements.txt "
-                "before enabling AI_PROVIDER=openai."
+                "google-genai package not installed. "
+                "Run `pip install google-genai`."
             ) from exc
-        self._client = AsyncOpenAI()
+
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
+
+        self._client = genai.Client(api_key=api_key)
 
     def generate(self, request: TripRequest) -> TripPlan:
-        raise NotImplementedError(
-            "OpenAITripProvider.generate is a placeholder. Implement the "
-            "async orchestration (emotion -> itinerary -> budget -> story) "
-            "and adapt FastAPI routes to async def before enabling this provider."
+        """Generates a complete structured TripPlan using Gemini."""
+
+        prompt = f"""
+        You are an expert AI travel planner and storyteller.
+        Generate a complete travel plan based on the user's preferences.
+        Return ONLY valid JSON that exactly matches the TripPlan schema.
+        Do NOT include markdown, explanations, headings, or any extra text.
+        User Preferences:
+        -----------------
+        Display Name: {request.display_name}
+        Travel Prompt: {request.travel_prompt}
+        Destination Scope: {request.destination_scope}
+        Duration: {request.duration_days} days
+        Travellers: {request.traveller_count}
+        Budget: {request.budget} {request.currency}
+        Currency: {request.currency}
+        Preferred Pace: {request.pace}
+        Interests: {", ".join(request.interests)}
+        Story Style: {request.story_style}
+
+        Requirements:
+        -------------
+        1. Understand the user's emotional intent from the travel prompt.
+        2. Create a PreferenceSummary including:
+        - emotional_intent
+        - themes
+        - pace
+
+        3. Select the most suitable destination that best fits the request.
+        4. Explain clearly why this destination was chosen.
+        5. Provide an estimated fit for the destination.
+
+        6. Generate a detailed itinerary for every day of the trip.
+        Each day should include:
+        - meaningful theme
+        - multiple activities
+        - realistic timings
+        - estimated costs
+        - category
+        - rationale
+        - memorable photo moments
+
+        7. Create a realistic budget plan including:
+        - transportation
+        - accommodation
+        - food
+        - attractions
+        - miscellaneous expenses
+
+        8. Include practical assumptions used while estimating the budget.
+
+        9. Suggest at least three optimization ideas to reduce costs without reducing the overall experience.
+
+        10. Write an immersive travel story in the requested story style.
+            The story should feel personal, emotional, and connected to the itinerary.
+
+        11. Ensure:
+            - Budget estimates are realistic.
+            - Activities match the user's interests.
+            - Pace matches the selected pace.
+            - Total itinerary length matches the requested duration.
+            - Story aligns with the destination and activities.
+
+        Return ONLY valid JSON.
+        """
+
+        response = self._client.models.generate_content(
+            model=MODEL_TARGET,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TripPlan,
+            ),
         )
 
-    def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
-        raise NotImplementedError("Implement alongside `generate`.")
+        return TripPlan.model_validate_json(response.text)
 
+    def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
+        """Regenerates only the story portion based on existing trip context."""
+        prompt = f"""
+        Rewrite the trip story for the following trip context:
+        - Destination: {request.destination_scope}
+        - User Interests: {', '.join(request.interests)}
+        - New Story Style: {style}
+        """
+
+        response = self._client.models.generate_content(
+            model=MODEL_TARGET,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=Story,
+            ),
+        )
+        
+        return Story.model_validate_json(response.text)
+
+    def revise_trip(self,request: TripRequest,instruction: str,) -> TripPlan:
+        """
+        Revises an existing trip request according to the user's instruction
+        and generates a new TripPlan.
+        """
+
+        prompt = f"""
+        You are an expert AI travel planner.
+
+        The user previously requested the following trip:
+
+        Display Name: {request.display_name}
+        Travel Prompt: {request.travel_prompt}
+        Destination Scope: {request.destination_scope}
+        Duration: {request.duration_days} days
+        Travellers: {request.traveller_count}
+        Budget: {request.budget} {request.currency}
+        Currency: {request.currency}
+        Preferred Pace: {request.pace}
+        Interests: {", ".join(request.interests)}
+        Story Style: {request.story_style}
+
+        The user now wants to revise the trip.
+
+        Revision Instruction:
+        "{instruction}"
+
+        Apply ONLY the requested changes while keeping everything else as consistent as possible.
+
+        Examples:
+        - "Reduce the budget" → keep destination if possible, choose cheaper hotels and activities.
+        - "Make the pace slower" → reduce the number of activities each day.
+        - "Add more adventure" → replace some activities with adventurous ones.
+        - "Add more culture" → include museums, heritage sites, local experiences.
+        - "Choose another destination" → select a better destination while respecting all other preferences.
+
+        Requirements:
+        -------------
+        1. Preserve the user's original emotional intent.
+        2. Apply the revision naturally.
+        3. Generate a complete new TripPlan.
+        4. Update itinerary, budget, destination, and story if necessary.
+        5. Keep costs realistic.
+        6. Story must reflect the revised itinerary.
+        7. Return ONLY valid JSON matching the TripPlan schema.
+        """
+
+        response = self._client.models.generate_content(
+            model=MODEL_TARGET,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TripPlan,
+            ),
+        )
+
+        plan = TripPlan.model_validate_json(response.text)
+
+    
+        if hasattr(plan, "generation_mode"):
+            plan.generation_mode = self.generation_mode
+
+        return plan
 
 @lru_cache
 def get_trip_provider() -> TripProvider:
-    provider_name = os.environ.get("AI_PROVIDER", "mock").strip().lower()
-    if provider_name == "openai":
-        logger.info("Using OpenAITripProvider (%s)", MODEL_TARGET)
-        return OpenAITripProvider()
+    print(os.getenv("AI_PROVIDER","mock"))
+    provider_name = os.getenv("AI_PROVIDER").strip().lower()
+
+    if provider_name == "gemini":
+        logger.info("Using GeminiTripProvider (%s)", MODEL_TARGET)
+        return GeminiTripProvider()
+
     logger.info("Using MockTripProvider")
     return MockTripProvider()

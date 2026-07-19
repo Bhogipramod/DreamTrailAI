@@ -94,8 +94,6 @@ class Story(BaseModel):
 
 
 class TripPlan(BaseModel):
-    # NOTE: renamed from `trip_id` -> `id` to match the frontend contract
-    # (frontend/src/types.ts TripPlan.id, used throughout App.tsx).
     id: str = Field(default_factory=lambda: str(uuid4()))
     preference_summary: PreferenceSummary
     destination: Destination

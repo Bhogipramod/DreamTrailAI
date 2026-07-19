@@ -15,7 +15,6 @@ type Tab = 'story' | 'itinerary' | 'budget' | 'memories';
 const SESSION_KEY = 'memorytrip.session.v1';
 const NAME_KEY = 'memorytrip.displayName.v1';
 
-// Required progress stages (BUSINESS_REQUIREMENTS.md, screen: Generation).
 const PROGRESS_STAGES = [
   'Understanding your travel mood',
   'Designing your trail',
@@ -81,8 +80,6 @@ export default function App() {
   const [revisionPrompt, setRevisionPrompt] = useState('');
   const [isRevising, setIsRevising] = useState(false);
 
-  // Persist to sessionStorage whenever the active plan changes, so a
-  // refresh restores it (DEVELOPER_PLAN.md, Developer B task 10).
   useEffect(() => {
     if (tripPlan && lastRequest) {
       saveSession({ request: lastRequest, plan: tripPlan });
@@ -190,7 +187,6 @@ export default function App() {
           </div>
         )}
 
-        {/* 0. WELCOME — display name only, not authentication (FR-08) */}
         {stage === 'welcome' && (
           <WelcomeScreen initialName={displayName} onContinue={handleWelcomeContinue} />
         )}
