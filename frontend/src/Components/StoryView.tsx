@@ -5,9 +5,10 @@ interface StoryViewProps {
   tripId: string;
   story: Story;
   onRegenerate: (style: string) => void;
+  readOnly?: boolean;
 }
 
-export const StoryView: React.FC<StoryViewProps> = ({ tripId, story, onRegenerate }) => {
+export const StoryView: React.FC<StoryViewProps> = ({ tripId, story, onRegenerate, readOnly = false }) => {
   const [selectedStyle, setSelectedStyle] = useState(story.style);
   const [isUpdating, setIsUpdating] = useState(false);
 
@@ -31,9 +32,7 @@ export const StoryView: React.FC<StoryViewProps> = ({ tripId, story, onRegenerat
             <p className="text-xs text-emerald-400 uppercase font-semibold tracking-widest mt-0.5">Labelled Narrative Engine</p>
           </div>
         </div>
-        
-        {/* Style Chooser Dropdown */}
-        <div className="flex items-center gap-2">
+        {!readOnly && <div className="flex items-center gap-2">
           <label className="text-xs text-slate-400 whitespace-nowrap">Change Tone:</label>
           <select
             value={selectedStyle}
@@ -43,7 +42,7 @@ export const StoryView: React.FC<StoryViewProps> = ({ tripId, story, onRegenerat
           >
             {stylesList.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-        </div>
+        </div>}
       </div>
 
       <div className={`transition-opacity duration-200 ${isUpdating ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>

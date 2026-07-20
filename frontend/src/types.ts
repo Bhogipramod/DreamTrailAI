@@ -1,4 +1,4 @@
-export type Pace = "relaxed" | "balanced" | "packed" | "active";
+export type Pace = "relaxed" | "balanced" | "packed";
 export type StoryStyle = "cinematic" | "fantasy" | "watercolor" | "documentary" | "animation";
 
 export interface TripRequest {
@@ -73,6 +73,18 @@ export interface Story {
   disclaimer: string;
 }
 
+export interface PhotoPayload {
+  data: string; // base64-encoded image bytes, no data: URI prefix
+  mime_type: string;
+}
+
+export interface DayNote {
+  day: number;
+  theme: string;
+  caption: string;
+  photos: PhotoPayload[];
+}
+
 export interface TripPlan {
   id: string;
   preference_summary: PreferenceSummary;
@@ -80,11 +92,24 @@ export interface TripPlan {
   itinerary: ItineraryDay[];
   budget: BudgetPlan;
   story: Story;
+  generation_mode: string;
 }
 
-export interface SavedTripListItem {
+// A trip request + the plan it produced. Saved trips retain both values so
+// they can be restored or displayed with the preferences that produced them.
+export interface SavedTrip {
   id: string;
-  destination_name: string;
-  country: string;
-  duration_days: number;
+  savedAt: number;
+  request: TripRequest;
+  plan: TripPlan;
+}
+
+// The active plan and all generated plans persisted for the browser session.
+// `request` and `plan` are optional when the traveller has started another
+// trail but has not generated it yet.
+export interface PersistedSession {
+  request?: TripRequest;
+  plan?: TripPlan;
+  savedTrips: SavedTrip[];
+  activeSavedTripId?: string;
 }
