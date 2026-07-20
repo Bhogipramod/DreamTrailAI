@@ -1,4 +1,4 @@
-import { TripRequest, TripPlan, Story, StoryStyle } from './types';
+import { TripRequest, TripPlan, Story, StoryStyle, DayNote, PhotoPayload } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -48,5 +48,31 @@ export async function regenerateStory(requestData: TripRequest, style: StoryStyl
     body: JSON.stringify({ trip: { ...requestData, story_style: style }, style }),
   });
   if (!res.ok) throw new Error(await parseErrorMessage(res, 'Failed to craft narrative changes.'));
+  return res.json();
+}
+
+// 4. Weave the traveller's own day-by-day captions into one flowing
+// retrospective story. Photos are optional and pre-resized/capped on the
+// client before being sent - vision-capable providers will actually look
+// at them, others use captions only.
+export async function generatePostTripStory(
+  requestData: TripRequest,
+  dayNotes: DayNote[],
+  extraNotes: string[],
+  extraPhotos: PhotoPayload[],
+  style: StoryStyle,
+): Promise<Story> {
+  const res = await fetch(`${API_BASE_URL}/api/trips/post-story`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      trip: requestData,
+      day_notes: dayNotes,
+      extra_notes: extraNotes,
+      extra_photos: extraPhotos,
+      style,
+    }),
+  });
+  if (!res.ok) throw new Error(await parseErrorMessage(res, 'Failed to write your trip story.'));
   return res.json();
 }

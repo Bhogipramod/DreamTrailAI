@@ -1,13 +1,21 @@
 """Trip generation providers.
 
-Two implementations sit behind a common `TripProvider` interface:
+Three implementations sit behind a common `TripProvider` interface:
 
 - `MockTripProvider`: deterministic, no network calls, reacts to
   destination scope / duration / budget / pace / interests. This is the
   default and the only provider needed for MVP1.
-- `OpenAITripProvider`: server-side GPT-5.6 provider, wired up but not
-  activated until `AI_PROVIDER=openai` and `OPENAI_API_KEY` are set. Do not
-  enable in the frontend; the key must never leave the backend.
+- `OpenAITripProvider`: server-side GPT-5.6 provider stub — not yet
+  implemented (raises NotImplementedError); wiring it up requires async
+  FastAPI routes. Do not enable in the frontend; the key must never leave
+  the backend.
+- `GeminiTripProvider`: server-side Gemini provider, fully implemented.
+  Activate with `AI_PROVIDER=gemini` and `GEMINI_API_KEY` set as
+  environment variables (never commit the key, never send it to the
+  frontend). Uses the `google-genai` SDK's structured-output support so
+  each stage's JSON response is validated directly into our own Pydantic
+  models. Optional `GEMINI_MODEL` env var overrides the default model
+  (`gemini-3.5-flash`).
 
 `get_trip_provider()` is the single entry point `main.py` should use.
 """
@@ -19,15 +27,18 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
+from typing import List
 
 from app.models import (
     BudgetLineItem,
     BudgetPlan,
+    DayNote,
     Destination,
     ItineraryDay,
     ItineraryItem,
     Optimization,
     Pace,
+    PhotoPayload,
     PreferenceSummary,
     Story,
     StoryStyle,
@@ -49,6 +60,20 @@ class TripProvider(ABC):
 
     @abstractmethod
     def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
+        ...
+
+    @abstractmethod
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        """Weaves the traveller's own day-by-day captions - and, for
+        providers that support it, a capped number of resized photos -
+        into one flowing retrospective story."""
         ...
 
 
@@ -332,6 +357,46 @@ class MockTripProvider(TripProvider):
         preferences = _build_preferences(request)
         return _build_story(destination, preferences, style)
 
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        destination = _pick_destination(request)
+        ordered_notes = sorted(day_notes, key=lambda n: n.day)
+        total_photos = sum(len(note.photos) for note in ordered_notes) + len(extra_photos)
+
+        if not ordered_notes and not extra_notes:
+            content = f"A quiet trip to {destination.name} - add photos and captions above to build your story."
+        else:
+            sentences = [
+                f"Day {note.day} carried the feeling of {note.theme.lower()}: {note.caption}"
+                for note in ordered_notes
+                if note.caption.strip()
+            ]
+            sentences.extend(note for note in extra_notes if note.strip())
+            body = " ".join(sentences)
+            opener = _STORY_OPENERS.get(style, _STORY_OPENERS[StoryStyle.DOCUMENTARY]).format(dest=destination.name)
+            content = f"{opener} {body}"
+            if total_photos:
+                # Mock mode is caption-only - it can't actually look at
+                # image content, so it says so rather than pretending to.
+                content += (
+                    f" ({total_photos} photo{'s' if total_photos != 1 else ''} attached - mock mode "
+                    "writes from your captions only; switch to a vision-capable provider for real "
+                    "photo analysis.)"
+                )
+
+        return Story(
+            style=style,
+            title=f"Looking Back: {destination.name}",
+            content=content,
+            disclaimer="Written from your own photos and captions - not independently verified.",
+        )
+
 
 # --------------------------------------------------------------------------
 # OpenAI provider — not active until explicitly configured. Keep the API
@@ -365,6 +430,234 @@ class OpenAITripProvider(TripProvider):
     def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
         raise NotImplementedError("Implement alongside `generate`.")
 
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        raise NotImplementedError("Implement alongside `generate`.")
+
+
+# --------------------------------------------------------------------------
+# Gemini provider — real, working implementation. Requires GEMINI_API_KEY
+# to be set server-side (never in the frontend / never committed). Uses the
+# `google-genai` SDK's structured-output support (response_schema=<Pydantic
+# model>) so the model's JSON is validated straight into our own models.
+# --------------------------------------------------------------------------
+
+GEMINI_MODEL_TARGET = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+
+
+def _build_destination_itinerary_schema():
+    """Small nested schema used only for the Gemini destination+itinerary
+    call. Defined lazily so importing this module never requires pydantic
+    features specific to this provider unless Gemini is actually selected."""
+    from pydantic import BaseModel as _BaseModel
+
+    class DestinationItineraryResult(_BaseModel):
+        destination: Destination
+        itinerary: List[ItineraryDay]
+
+    return DestinationItineraryResult
+
+
+class GeminiTripProvider(TripProvider):
+    generation_mode = "gemini"
+
+    def __init__(self) -> None:
+        try:
+            from google import genai  # local import: optional dependency
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "google-genai package not installed. Add `google-genai` to "
+                "requirements.txt before enabling AI_PROVIDER=gemini."
+            ) from exc
+
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Export it server-side "
+                "(never in the frontend, never committed) before enabling "
+                "AI_PROVIDER=gemini."
+            )
+
+        self._client = genai.Client(api_key=api_key)
+        self._DestinationItineraryResult = _build_destination_itinerary_schema()
+
+    def _generate_structured(self, contents, schema):
+        from google.genai import types
+
+        response = self._client.models.generate_content(
+            model=GEMINI_MODEL_TARGET,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+            ),
+        )
+        return response.parsed
+
+    def _run_emotion_stage(self, request: TripRequest) -> PreferenceSummary:
+        prompt = (
+            "You are a travel psychologist. Read the traveller's prompt and turn it "
+            "into a structured preference profile: a primary emotional intent, up to "
+            "three supporting themes, and confirm the travel pace.\n\n"
+            f"Prompt: {request.travel_prompt}\n"
+            f"Stated interests: {', '.join(request.interests) or 'none given'}\n"
+            f"Pace: {request.pace.value}"
+        )
+        return self._generate_structured(prompt, PreferenceSummary)
+
+    def _run_destination_itinerary_stage(self, request: TripRequest, prefs: PreferenceSummary):
+        scope = (request.destination_scope or "").strip()
+        is_open = not scope or scope.lower() == "open to suggestions"
+
+        if is_open:
+            destination_instruction = (
+                "The traveller has not named a destination — recommend the single best "
+                "destination for their preferences, budget, and origin."
+            )
+        else:
+            destination_instruction = (
+                f"The traveller has specified a destination: '{scope}'. You MUST set the "
+                "destination to this exact place (fill in country and a fitting rationale) "
+                "— do not substitute, override, or 'improve on' it with a different location."
+            )
+
+        prompt = (
+            "You are a travel planner. Produce a destination and a complete day-by-day "
+            f"itinerary with exactly {request.duration_days} days (day numbers 1 to "
+            f"{request.duration_days}), each with a morning, afternoon, and evening "
+            "activity. Every itinerary item needs a title, description, category, "
+            "rationale tying back to the traveller's emotional intent, an estimated "
+            "cost in the traveller's currency, and a suggested photo/memory moment. "
+            "Do not invent real-time prices, bookings, or availability as fact — mark "
+            f"them as estimates.\n\n{destination_instruction}\n\n"
+            f"Origin: {request.origin}\n"
+            f"Destination scope requested: {request.destination_scope}\n"
+            f"Traveller count: {request.traveller_count}\n"
+            f"Currency: {request.currency}\n"
+            f"Total budget: {request.budget}\n"
+            f"Emotional intent: {prefs.emotional_intent}\n"
+            f"Themes: {', '.join(prefs.themes)}\n"
+            f"Pace: {prefs.pace.value}"
+        )
+        result = self._generate_structured(prompt, self._DestinationItineraryResult)
+        return result.destination, result.itinerary
+
+    def _run_budget_stage(self, request: TripRequest, itinerary: List[ItineraryDay]) -> BudgetPlan:
+        itinerary_summary = "\n".join(
+            f"Day {day.day}: {day.theme} (items: {len(day.items)}, "
+            f"estimated cost: {day.estimated_daily_cost})"
+            for day in itinerary
+        )
+        prompt = (
+            "You are a travel budget analyst. Build a category budget breakdown for "
+            f"this trip. The traveller's total budget is {request.budget} "
+            f"{request.currency}. Compare it against the itinerary's estimated costs, "
+            "report the variance, list assumptions (mark all figures as estimates, "
+            "not live pricing), and if the plan is over budget provide at least three "
+            "actionable optimisation suggestions with estimated savings and impact.\n\n"
+            f"Itinerary overview:\n{itinerary_summary}"
+        )
+        return self._generate_structured(prompt, BudgetPlan)
+
+    def _run_story_stage(self, destination: Destination, prefs: PreferenceSummary, style: StoryStyle) -> Story:
+        prompt = (
+            f"You are a creative travel essayist. Write a short, {style.value} "
+            f"pre-trip inspirational story about a trip to {destination.name}, "
+            f"{destination.country}. Ground it in the traveller's emotional intent: "
+            f"{prefs.emotional_intent}. Themes to weave in: {', '.join(prefs.themes)}. "
+            "This is a fictional, inspirational piece written before the trip happens - "
+            "do not state anything as a real, verified event. Include a short "
+            "disclaimer field noting it is an inspirational pre-trip story."
+        )
+        return self._generate_structured(prompt, Story)
+
+    def generate(self, request: TripRequest) -> TripPlan:
+        prefs = self._run_emotion_stage(request)
+        destination, itinerary = self._run_destination_itinerary_stage(request, prefs)
+        budget = self._run_budget_stage(request, itinerary)
+        story = self._run_story_stage(destination, prefs, request.story_style)
+
+        return TripPlan(
+            preference_summary=prefs,
+            destination=destination,
+            itinerary=itinerary,
+            budget=budget,
+            story=story,
+            generation_mode=self.generation_mode,
+        )
+
+    def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
+        # Lighter path than a full generate(): re-derive preferences +
+        # destination context, then only call the story stage.
+        prefs = self._run_emotion_stage(request)
+        destination, _itinerary = self._run_destination_itinerary_stage(request, prefs)
+        return self._run_story_stage(destination, prefs, style)
+
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        from google.genai import types
+        import base64
+
+        ordered_notes = sorted(day_notes, key=lambda n: n.day)
+
+        instruction = (
+            f"You are a travel essayist writing a {style.value} retrospective story about "
+            "a trip that has already happened. Weave the traveller's own day-by-day notes "
+            "and any attached photos into one flowing, cohesive narrative — do not just "
+            "list the days back verbatim. Base what you say about each photo only on what "
+            "is actually visible in it; do not invent events, people, or details the notes "
+            "and photos don't support. Write in past tense, as something that already "
+            "occurred. Include a short disclaimer noting this story is written from the "
+            "traveller's own photos/captions and is not independently verified.\n\n"
+            f"Destination: {request.destination_scope or 'as travelled'}"
+        )
+
+        # Total image cap across the whole request - vision tokens cost far
+        # more than text, so this bounds both payload size and API cost
+        # regardless of how many photos the user actually uploaded.
+        MAX_TOTAL_IMAGES = 12
+        images_used = 0
+
+        contents: list = [instruction]
+        for note in ordered_notes:
+            if not note.caption.strip() and not note.photos:
+                continue
+            contents.append(f"Day {note.day} ({note.theme}): {note.caption}")
+            for photo in note.photos:
+                if images_used >= MAX_TOTAL_IMAGES:
+                    break
+                contents.append(
+                    types.Part.from_bytes(data=base64.b64decode(photo.data), mime_type=photo.mime_type)
+                )
+                images_used += 1
+
+        if extra_notes or extra_photos:
+            contents.append("Other moments from the trip:")
+            for note in extra_notes:
+                if note.strip():
+                    contents.append(f"- {note}")
+            for photo in extra_photos:
+                if images_used >= MAX_TOTAL_IMAGES:
+                    break
+                contents.append(
+                    types.Part.from_bytes(data=base64.b64decode(photo.data), mime_type=photo.mime_type)
+                )
+                images_used += 1
+
+        return self._generate_structured(contents, Story)
+
 
 @lru_cache
 def get_trip_provider() -> TripProvider:
@@ -372,5 +665,8 @@ def get_trip_provider() -> TripProvider:
     if provider_name == "openai":
         logger.info("Using OpenAITripProvider (%s)", MODEL_TARGET)
         return OpenAITripProvider()
+    if provider_name == "gemini":
+        logger.info("Using GeminiTripProvider (%s)", GEMINI_MODEL_TARGET)
+        return GeminiTripProvider()
     logger.info("Using MockTripProvider")
     return MockTripProvider()

@@ -73,6 +73,18 @@ export interface Story {
   disclaimer: string;
 }
 
+export interface PhotoPayload {
+  data: string; // base64-encoded image bytes, no data: URI prefix
+  mime_type: string;
+}
+
+export interface DayNote {
+  day: number;
+  theme: string;
+  caption: string;
+  photos: PhotoPayload[];
+}
+
 export interface TripPlan {
   id: string;
   preference_summary: PreferenceSummary;

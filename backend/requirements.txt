@@ -3,7 +3,12 @@ uvicorn[standard]>=0.27,<1.0
 pydantic>=2.6,<3.0
 pytest>=8.0,<9.0
 httpx>=0.27,<1.0
+python-dotenv>=1.0,<2.0
 
 # Uncomment before enabling AI_PROVIDER=openai (server-side only, keep
 # OPENAI_API_KEY out of the frontend and out of version control):
 # openai>=1.35,<2.0
+
+# Uncomment before enabling AI_PROVIDER=gemini (server-side only, keep
+# GEMINI_API_KEY out of the frontend and out of version control):
+# google-genai>=1.0,<2.0
