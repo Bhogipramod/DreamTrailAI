@@ -114,3 +114,40 @@ class StoryRequest(BaseModel):
 
     trip: TripRequest
     style: StoryStyle
+
+
+class PhotoPayload(BaseModel):
+    """A single resized, base64-encoded image sent for real vision
+    analysis. Kept deliberately small (frontend resizes before sending)
+    since image tokens cost far more than text - see PostTripStoryRequest
+    for the caps applied on the frontend."""
+
+    data: str = Field(description="Base64-encoded image bytes, no data: URI prefix")
+    mime_type: str = Field(default="image/jpeg")
+
+
+class DayNote(BaseModel):
+    """One day's worth of user-written captions (and optionally a few
+    resized photos) from the post-trip photo upload flow, sent back to
+    the backend so the post-trip story can reference what the traveller
+    actually said - and optionally what the photos actually show."""
+
+    day: int
+    theme: str
+    caption: str
+    photos: List[PhotoPayload] = Field(default_factory=list)
+
+
+class PostTripStoryRequest(BaseModel):
+    """Used by POST /api/trips/post-story.
+
+    Photos are optional and capped client-side (a handful per day, a
+    handful of extras) before they ever reach this endpoint - sending
+    real image bytes to a vision-capable model costs meaningfully more
+    than text-only captions, so this is intentionally bounded."""
+
+    trip: TripRequest
+    day_notes: List[DayNote] = Field(default_factory=list)
+    extra_notes: List[str] = Field(default_factory=list)
+    extra_photos: List[PhotoPayload] = Field(default_factory=list)
+    style: StoryStyle = StoryStyle.DOCUMENTARY

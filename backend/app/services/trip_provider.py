@@ -1,10 +1,23 @@
 """Trip generation providers.
 
-Two implementations sit behind a common `TripProvider` interface:
+Three implementations sit behind a common `TripProvider` interface:
 
 - `MockTripProvider`: deterministic, no network calls, reacts to
-  destination scope / duration / budget / pace / interests. 
-- `AITripProvider`: server-side AI model provider.
+  destination scope / duration / budget / pace / interests. This is the
+  default and the only provider needed for MVP1.
+- `OpenAITripProvider`: server-side GPT-5.6 provider stub — not yet
+  implemented (raises NotImplementedError); wiring it up requires async
+  FastAPI routes. Do not enable in the frontend; the key must never leave
+  the backend.
+- `GeminiTripProvider`: server-side Gemini provider, fully implemented.
+  Activate with `AI_PROVIDER=gemini` and `GEMINI_API_KEY` set as
+  environment variables (never commit the key, never send it to the
+  frontend). Uses the `google-genai` SDK's structured-output support so
+  each stage's JSON response is validated directly into our own Pydantic
+  models. Optional `GEMINI_MODEL` env var overrides the default model
+  (`gemini-3.5-flash`).
+
+`get_trip_provider()` is the single entry point `main.py` should use.
 """
 
 from __future__ import annotations
@@ -25,15 +38,18 @@ from google.genai import types
 env_path = Path(__file__).resolve().parent.parent.parent / ".env"
 
 load_dotenv(env_path)
+from typing import List
 
 from app.models import (
     BudgetLineItem,
     BudgetPlan,
+    DayNote,
     Destination,
     ItineraryDay,
     ItineraryItem,
     Optimization,
     Pace,
+    PhotoPayload,
     PreferenceSummary,
     Story,
     StoryStyle,
@@ -55,6 +71,20 @@ class TripProvider(ABC):
 
     @abstractmethod
     def regenerate_story(self, request: TripRequest, style: StoryStyle) -> Story:
+        ...
+
+    @abstractmethod
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        """Weaves the traveller's own day-by-day captions - and, for
+        providers that support it, a capped number of resized photos -
+        into one flowing retrospective story."""
         ...
 
 
@@ -372,6 +402,46 @@ class MockTripProvider(TripProvider):
             revised_request.interests.append("food")
 
         return self.generate(revised_request)
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        destination = _pick_destination(request)
+        ordered_notes = sorted(day_notes, key=lambda n: n.day)
+        total_photos = sum(len(note.photos) for note in ordered_notes) + len(extra_photos)
+
+        if not ordered_notes and not extra_notes:
+            content = f"A quiet trip to {destination.name} - add photos and captions above to build your story."
+        else:
+            sentences = [
+                f"Day {note.day} carried the feeling of {note.theme.lower()}: {note.caption}"
+                for note in ordered_notes
+                if note.caption.strip()
+            ]
+            sentences.extend(note for note in extra_notes if note.strip())
+            body = " ".join(sentences)
+            opener = _STORY_OPENERS.get(style, _STORY_OPENERS[StoryStyle.DOCUMENTARY]).format(dest=destination.name)
+            content = f"{opener} {body}"
+            if total_photos:
+                # Mock mode is caption-only - it can't actually look at
+                # image content, so it says so rather than pretending to.
+                content += (
+                    f" ({total_photos} photo{'s' if total_photos != 1 else ''} attached - mock mode "
+                    "writes from your captions only; switch to a vision-capable provider for real "
+                    "photo analysis.)"
+                )
+
+        return Story(
+            style=style,
+            title=f"Looking Back: {destination.name}",
+            content=content,
+            disclaimer="Written from your own photos and captions - not independently verified.",
+        )
+
 
 # --------------------------------------------------------------------------
 # AI trip provider 

@@ -348,6 +348,11 @@ export default function App() {
           <div className="space-y-8">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/20 p-6 rounded-2xl border border-slate-800">
               <div>
+                {lastRequest?.origin && (
+                  <p className="text-xs text-cyan-400/90 font-semibold uppercase tracking-wide mb-1">
+                    {lastRequest.origin} → {tripPlan.destination.name}
+                  </p>
+                )}
                 <h2 className="text-3xl font-extrabold text-slate-100">{tripPlan.destination.name}, {tripPlan.destination.country}</h2>
                 <p className="text-sm text-slate-400 mt-1">{tripPlan.destination.rationale}</p>
                 <span className="inline-block mt-2 text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950 border border-slate-800 px-2 py-1 rounded">
@@ -418,7 +423,13 @@ export default function App() {
               {activeTab === 'itinerary' && <ItineraryView itinerary={tripPlan.itinerary} />}
               {activeTab === 'budget' && <BudgetView budget={tripPlan.budget} />}
               {activeTab === 'memories' && (
-                <PostTripStory destination={tripPlan.destination} itinerary={tripPlan.itinerary} />
+                lastRequest ? (
+                  <PostTripStory destination={tripPlan.destination} itinerary={tripPlan.itinerary} tripRequest={lastRequest} />
+                ) : (
+                  <p className="text-sm text-slate-500 text-center py-12">
+                    Your trip details aren't available right now — try generating a new plan.
+                  </p>
+                )
               )}
             </div>
           </div>

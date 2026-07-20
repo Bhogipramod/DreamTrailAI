@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ItineraryDay, Destination } from '../types';
+import { ItineraryDay, Destination, TripRequest, DayNote, PhotoPayload, Story, StoryStyle } from '../types';
+import { generatePostTripStory } from '../api';
+import { resizeImageToPhotoPayload } from '../imageUtils';
 
 interface DayPhotoFile {
   id: string;
+  file: File;
   previewUrl: string;
 }
 
@@ -13,6 +16,7 @@ interface DayEntry {
 
 interface ExtraPhoto {
   id: string;
+  file: File;
   previewUrl: string;
   caption: string;
 }
@@ -20,10 +24,19 @@ interface ExtraPhoto {
 interface PostTripStoryProps {
   destination: Destination;
   itinerary: ItineraryDay[];
+  tripRequest: TripRequest;
 }
 
 const MAX_PHOTOS_PER_DAY = 6;
 const MAX_EXTRA_PHOTOS = 6;
+const STORY_STYLES: StoryStyle[] = ['documentary', 'watercolor', 'cinematic', 'fantasy', 'animation'];
+
+// How many photos actually get resized + sent to the AI when vision
+// analysis is turned on. Capped well below the upload limits above -
+// image tokens cost far more than text, so this bounds cost regardless
+// of how many photos the user uploaded.
+const MAX_IMAGES_PER_DAY_FOR_AI = 2;
+const MAX_EXTRA_IMAGES_FOR_AI = 2;
 
 function defaultCaptionForDay(destination: Destination, day: ItineraryDay): string {
   // Derived entirely from data already generated for this trip (itinerary
@@ -31,12 +44,19 @@ function defaultCaptionForDay(destination: Destination, day: ItineraryDay): stri
   return `Day ${day.day}: ${day.theme} in ${destination.name}`;
 }
 
-export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itinerary }) => {
+export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itinerary, tripRequest }) => {
   // One entry per itinerary day, keyed by day number - each can hold several photos.
   const [dayEntries, setDayEntries] = useState<Record<number, DayEntry>>({});
   const [extraPhotos, setExtraPhotos] = useState<ExtraPhoto[]>([]);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const extraInputRef = useRef<HTMLInputElement>(null);
+
+  const [storyStyle, setStoryStyle] = useState<StoryStyle>('documentary');
+  const [includePhotosInStory, setIncludePhotosInStory] = useState(false);
+  const [tripStory, setTripStory] = useState<Story | null>(null);
+  const [isGeneratingStory, setIsGeneratingStory] = useState(false);
+  const [generatingStatus, setGeneratingStatus] = useState('');
+  const [storyError, setStoryError] = useState<string | null>(null);
 
   // Revoke every object URL on unmount to avoid leaking memory.
   useEffect(() => {
@@ -57,6 +77,7 @@ export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itine
       const accepted = files.slice(0, room);
       const newPhotos: DayPhotoFile[] = accepted.map((file, idx) => ({
         id: `${Date.now()}-${idx}-${file.name}`,
+        file,
         previewUrl: URL.createObjectURL(file),
       }));
       return {
@@ -99,6 +120,7 @@ export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itine
 
     const newPhotos: ExtraPhoto[] = accepted.map((file, idx) => ({
       id: `${Date.now()}-${idx}-${file.name}`,
+      file,
       previewUrl: URL.createObjectURL(file),
       caption: `A moment from ${destination.name}`,
     }));
@@ -135,6 +157,48 @@ export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itine
     setTimeout(() => setCopyStatus('idle'), 2500);
   };
 
+  const totalPhotosUploaded =
+    Object.values(dayEntries).reduce((sum, entry) => sum + entry.photos.length, 0) + extraPhotos.length;
+
+  const handleGenerateStory = async () => {
+    setIsGeneratingStory(true);
+    setStoryError(null);
+    try {
+      let dayNotes: DayNote[];
+      let extraNotesPayload: string[] = extraPhotos.map((p) => p.caption).filter(Boolean);
+      let extraPhotosPayload: PhotoPayload[] = [];
+
+      if (includePhotosInStory) {
+        setGeneratingStatus('Preparing photos...');
+        dayNotes = await Promise.all(
+          itinerary
+            .filter((day) => dayEntries[day.day]?.caption)
+            .map(async (day) => {
+              const entry = dayEntries[day.day];
+              const photosToSend = entry.photos.slice(0, MAX_IMAGES_PER_DAY_FOR_AI);
+              const resized = await Promise.all(photosToSend.map((p) => resizeImageToPhotoPayload(p.file)));
+              return { day: day.day, theme: day.theme, caption: entry.caption, photos: resized };
+            }),
+        );
+        const extrasToResize = extraPhotos.slice(0, MAX_EXTRA_IMAGES_FOR_AI);
+        extraPhotosPayload = await Promise.all(extrasToResize.map((p) => resizeImageToPhotoPayload(p.file)));
+      } else {
+        dayNotes = itinerary
+          .filter((day) => dayEntries[day.day]?.caption)
+          .map((day) => ({ day: day.day, theme: day.theme, caption: dayEntries[day.day].caption, photos: [] }));
+      }
+
+      setGeneratingStatus('Writing your story...');
+      const story = await generatePostTripStory(tripRequest, dayNotes, extraNotesPayload, extraPhotosPayload, storyStyle);
+      setTripStory(story);
+    } catch (err: any) {
+      setStoryError(err.message || 'Could not write your trip story. Please try again.');
+    } finally {
+      setIsGeneratingStory(false);
+      setGeneratingStatus('');
+    }
+  };
+
   const hasAnyPhoto = Object.keys(dayEntries).length > 0 || extraPhotos.length > 0;
 
   return (
@@ -143,11 +207,7 @@ export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itine
         <h3 className="text-lg font-bold text-slate-200">📸 Post-Trip Memory Story</h3>
         <p className="text-xs text-slate-400 mt-1 max-w-lg">
           Add a few photos to each day of your trip — we'll suggest one caption per day from your
-          itinerary. Everything here stays in this browser tab — nothing is uploaded or saved.
-        </p>
-        <p className="text-[11px] text-cyan-400/80 mt-2">
-          🚧 Coming soon: automatic photo detection and curation, so DreamTrail AI picks your best
-          shots and writes the story for you.
+          itinerary. Everything here stays in this browser tab unless you turn on photo analysis below.
         </p>
       </div>
 
@@ -278,19 +338,76 @@ export const PostTripStory: React.FC<PostTripStoryProps> = ({ destination, itine
       </div>
 
       {hasAnyPhoto && (
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-          <button
-            onClick={handleCopyCaptionPack}
-            className="text-sm bg-slate-900 border border-slate-700 hover:border-slate-600 px-5 py-2.5 rounded-lg font-semibold text-slate-200 transition focus:outline-none focus:ring-2 focus:ring-emerald-400"
-          >
-            📋 Copy Caption Pack
-          </button>
-          {copyStatus === 'copied' && (
-            <span role="status" className="text-xs text-emerald-400">Copied — paste it into your post.</span>
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={handleCopyCaptionPack}
+              className="text-sm bg-slate-900 border border-slate-700 hover:border-slate-600 px-5 py-2.5 rounded-lg font-semibold text-slate-200 transition focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            >
+              📋 Copy Caption Pack
+            </button>
+            {copyStatus === 'copied' && (
+              <span role="status" className="text-xs text-emerald-400">Copied — paste it into your post.</span>
+            )}
+            {copyStatus === 'error' && (
+              <span role="alert" className="text-xs text-rose-400">Couldn't copy automatically — select and copy the captions manually.</span>
+            )}
+          </div>
+
+          <div className="border-t border-slate-800/70 pt-4 space-y-3">
+            <label className="flex items-start gap-2 text-xs text-slate-400 cursor-pointer max-w-md mx-auto">
+              <input
+                type="checkbox"
+                checked={includePhotosInStory}
+                onChange={(e) => setIncludePhotosInStory(e.target.checked)}
+                className="mt-0.5 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              />
+              <span>
+                Let AI actually look at up to {MAX_IMAGES_PER_DAY_FOR_AI} photo(s) per day (not just captions).
+                {' '}Uses meaningfully more API quota than caption-only — turn off if you're on a tight quota.
+                {totalPhotosUploaded > 0 && includePhotosInStory && (
+                  <> Currently would send up to {Math.min(totalPhotosUploaded, itinerary.length * MAX_IMAGES_PER_DAY_FOR_AI + MAX_EXTRA_IMAGES_FOR_AI)} image(s).</>
+                )}
+              </span>
+            </label>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <label htmlFor="post-story-style" className="text-xs text-slate-400 whitespace-nowrap">Story style:</label>
+              <select
+                id="post-story-style"
+                value={storyStyle}
+                onChange={(e) => setStoryStyle(e.target.value as StoryStyle)}
+                className="bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                {STORY_STYLES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <button
+                onClick={handleGenerateStory}
+                disabled={isGeneratingStory}
+                className="text-sm bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold px-5 py-2.5 rounded-lg transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                {isGeneratingStory ? (generatingStatus || 'Working...') : '✨ Generate My Trip Story'}
+              </button>
+            </div>
+          </div>
+          {storyError && (
+            <p role="alert" className="text-xs text-rose-400 text-center">{storyError}</p>
           )}
-          {copyStatus === 'error' && (
-            <span role="alert" className="text-xs text-rose-400">Couldn't copy automatically — select and copy the captions manually.</span>
-          )}
+        </div>
+      )}
+
+      {tripStory && (
+        <div className="bg-slate-900/30 border border-slate-800/80 rounded-2xl p-8 max-w-2xl mx-auto shadow-md">
+          <h3 className="text-2xl font-bold text-slate-100">{tripStory.title}</h3>
+          <p className="text-xs text-emerald-400 uppercase font-semibold tracking-widest mt-0.5 mb-6">
+            Your Trip, In Story Form
+          </p>
+          <p className="text-slate-300 leading-relaxed text-lg whitespace-pre-wrap italic">
+            "{tripStory.content}"
+          </p>
+          <div className="mt-6 pt-4 border-t border-slate-800/50">
+            <p className="text-xs text-slate-500 font-medium">{tripStory.disclaimer}</p>
+          </div>
         </div>
       )}
     </div>
