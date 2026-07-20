@@ -7,7 +7,6 @@ async function parseErrorMessage(res: Response, fallback: string): Promise<strin
     const body = await res.json();
     if (typeof body?.detail === 'string') return body.detail;
     if (Array.isArray(body?.detail)) {
-      // FastAPI validation error shape
       return body.detail.map((d: any) => d.msg).join('; ');
     }
   } catch {

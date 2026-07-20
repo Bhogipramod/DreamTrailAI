@@ -95,9 +95,21 @@ export interface TripPlan {
   generation_mode: string;
 }
 
-// A trip request + the plan it produced, persisted to sessionStorage so
-// the plan survives a refresh (DEVELOPER_PLAN.md, Developer B task 10).
-export interface PersistedSession {
+// A trip request + the plan it produced. Saved trips retain both values so
+// they can be restored or displayed with the preferences that produced them.
+export interface SavedTrip {
+  id: string;
+  savedAt: number;
   request: TripRequest;
   plan: TripPlan;
+}
+
+// The active plan and all generated plans persisted for the browser session.
+// `request` and `plan` are optional when the traveller has started another
+// trail but has not generated it yet.
+export interface PersistedSession {
+  request?: TripRequest;
+  plan?: TripPlan;
+  savedTrips: SavedTrip[];
+  activeSavedTripId?: string;
 }
