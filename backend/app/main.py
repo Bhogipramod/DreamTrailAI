@@ -72,22 +72,10 @@ def generate_trip(request: TripRequest) -> TripPlan:
 
 @app.post("/api/trips/revise", response_model=TripPlan)
 def revise_trip(request: RevisionRequest) -> TripPlan:
-    updated = request.trip.model_copy(deep=True)
-    instruction = request.instruction.lower()
-    if "budget" in instruction or "cheap" in instruction:
-        updated.budget = max(1000, int(updated.budget * 0.85))
-    if "slow" in instruction or "relax" in instruction:
-        updated.pace = Pace.RELAXED
-    if "fast" in instruction or "pack" in instruction:
-        updated.pace = Pace.PACKED
-    if "adventure" in instruction:
-        updated.interests = ["adventure", *[item for item in updated.interests if item != "adventure"]]
-    if "culture" in instruction:
-        updated.interests = ["culture", *[item for item in updated.interests if item != "culture"]]
-    if "destination" in instruction:
-        updated.destination_scope = "Open to suggestions"
-
-    return _call_provider(lambda: get_trip_provider().generate(updated))
+    try:
+        return get_trip_provider().revise_trip(request.trip, request.instruction)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
 @app.post("/api/trips/story", response_model=Story)

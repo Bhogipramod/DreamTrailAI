@@ -6,16 +6,16 @@ import { ItineraryView } from './Components/ItineraryView';
 import { BudgetView } from './Components/BudgetView';
 import { PreferenceSummaryCard } from './Components/PreferenceSummaryCard';
 import { PostTripStory } from './Components/PostTripStory';
-import { TripRequest, TripPlan, StoryStyle, PersistedSession } from './types';
+import { TripRequest, TripPlan, StoryStyle, PersistedSession, SavedTrip } from './types';
 import { generateTripPlan, reviseTripPlan, regenerateStory } from './api';
 
-type AppStage = 'welcome' | 'landing' | 'intake' | 'generating' | 'dashboard';
+type AppStage = 'welcome' | 'landing' | 'intake' | 'generating' | 'dashboard' | 'saved-trips';
 type Tab = 'story' | 'itinerary' | 'budget' | 'memories';
+type LegacySavedTrip = Pick<SavedTrip, 'request' | 'plan'>;
 
 const SESSION_KEY = 'memorytrip.session.v1';
 const NAME_KEY = 'memorytrip.displayName.v1';
 
-// Required progress stages (BUSINESS_REQUIREMENTS.md, screen: Generation).
 const PROGRESS_STAGES = [
   'Understanding your travel mood',
   'Designing your trail',
@@ -46,6 +46,25 @@ function saveSession(session: PersistedSession | null) {
   }
 }
 
+function saveCurrentTrip(
+  savedTrips: SavedTrip[],
+  activeSavedTripId: string | null,
+  request: TripRequest | null,
+  plan: TripPlan | null,
+): { savedTrips: SavedTrip[]; activeSavedTripId: string | null } {
+  if (!request || !plan) return { savedTrips, activeSavedTripId };
+
+  const id = activeSavedTripId ?? `saved-trip-${Date.now()}-${plan.id}`;
+  const trip: SavedTrip = { id, savedAt: Date.now(), request, plan };
+
+  return {
+    // Re-saving a revised trip replaces its earlier version and moves it to
+    // the top, so only the latest final plan is retained.
+    savedTrips: [trip, ...savedTrips.filter(savedTrip => savedTrip.id !== id)],
+    activeSavedTripId: id,
+  };
+}
+
 function loadDisplayName(): string {
   try {
     return sessionStorage.getItem(NAME_KEY) ?? '';
@@ -65,29 +84,48 @@ function saveDisplayName(name: string) {
 export default function App() {
   const initialSession = loadSession();
   const initialName = loadDisplayName();
+  // Include the active trip when migrating sessions created before savedTrips
+  // was introduced.
+  const savedTripsFromSession: Array<SavedTrip | LegacySavedTrip> = initialSession?.savedTrips
+    ?? (initialSession?.plan && initialSession.request
+      ? [{ request: initialSession.request, plan: initialSession.plan }]
+      : []);
+  const initialSavedTrips: SavedTrip[] = savedTripsFromSession.map((savedTrip, index) => ({
+    ...savedTrip,
+    id: 'id' in savedTrip ? savedTrip.id : `saved-trip-${index}-${savedTrip.plan.id}`,
+    savedAt: 'savedAt' in savedTrip ? savedTrip.savedAt : index,
+  })).sort((a, b) => b.savedAt - a.savedAt);
 
   const [displayName, setDisplayName] = useState<string>(initialName);
   const [stage, setStage] = useState<AppStage>(() => {
-    if (initialSession) return 'dashboard';
+    if (initialSession?.plan && initialSession.request) return 'dashboard';
     if (initialName) return 'landing';
     return 'welcome';
   });
   const [activeTab, setActiveTab] = useState<Tab>('story');
   const [tripPlan, setTripPlan] = useState<TripPlan | null>(initialSession?.plan ?? null);
   const [lastRequest, setLastRequest] = useState<TripRequest | null>(initialSession?.request ?? null);
+  const [savedTrips, setSavedTrips] = useState<SavedTrip[]>(initialSavedTrips);
+  const [activeSavedTripId, setActiveSavedTripId] = useState<string | null>(
+    initialSession?.activeSavedTripId
+      ?? initialSavedTrips.find(savedTrip => savedTrip.plan.id === initialSession?.plan?.id)?.id
+      ?? null,
+  );
+  const [selectedSavedTripId, setSelectedSavedTripId] = useState<string | null>(initialSavedTrips[0]?.id ?? null);
 
   const [loadingStage, setLoadingStage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [revisionPrompt, setRevisionPrompt] = useState('');
   const [isRevising, setIsRevising] = useState(false);
 
-  // Persist to sessionStorage whenever the active plan changes, so a
-  // refresh restores it (DEVELOPER_PLAN.md, Developer B task 10).
   useEffect(() => {
-    if (tripPlan && lastRequest) {
-      saveSession({ request: lastRequest, plan: tripPlan });
-    }
-  }, [tripPlan, lastRequest]);
+    saveSession({
+      request: lastRequest ?? undefined,
+      plan: tripPlan ?? undefined,
+      savedTrips,
+      activeSavedTripId: activeSavedTripId ?? undefined,
+    });
+  }, [tripPlan, lastRequest, savedTrips, activeSavedTripId]);
 
   const handleWelcomeContinue = (name: string) => {
     setDisplayName(name);
@@ -110,6 +148,7 @@ export default function App() {
       const outcome = await generateTripPlan(data);
       setTripPlan(outcome);
       setLastRequest(data);
+      setActiveSavedTripId(null);
       setActiveTab('story');
       setStage('dashboard');
     } catch (err: any) {
@@ -159,12 +198,65 @@ export default function App() {
     }
   };
 
+  const persistCurrentTrip = () => {
+    const result = saveCurrentTrip(savedTrips, activeSavedTripId, lastRequest, tripPlan);
+    setSavedTrips(result.savedTrips);
+    setActiveSavedTripId(result.activeSavedTripId);
+    saveSession({
+      request: lastRequest ?? undefined,
+      plan: tripPlan ?? undefined,
+      savedTrips: result.savedTrips,
+      activeSavedTripId: result.activeSavedTripId ?? undefined,
+    });
+    return result;
+  };
+
   const handlePlanAnother = () => {
+    const result = persistCurrentTrip();
     setTripPlan(null);
     setLastRequest(null);
-    saveSession(null);
+    setActiveSavedTripId(null);
+    saveSession({ savedTrips: result.savedTrips });
     setStage('intake');
   };
+
+  const handleShowSavedTrips = () => {
+    const result = persistCurrentTrip();
+    const selectedId = result.activeSavedTripId ?? result.savedTrips[0]?.id ?? null;
+    setSelectedSavedTripId(selectedId);
+    setActiveTab('story');
+    setStage('saved-trips');
+  };
+
+  const renderPlanTabs = (plan: TripPlan, readOnly = false) => (
+    <>
+      <div className="flex border-b border-slate-900 gap-2" role="tablist">
+        {([
+          ['story', 'Story View'],
+          ['itinerary', 'Trail Itinerary'],
+          ['budget', 'Budget Breakdown'],
+          ['memories', 'Post-Trip Memories'],
+        ] as [Tab, string][]).map(([tab, label]) => (
+          <button
+            key={tab}
+            role="tab"
+            aria-selected={activeTab === tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-6 py-3 border-b-2 text-sm font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-emerald-400 ${activeTab === tab ? 'border-emerald-500 text-emerald-400 bg-slate-900/20' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="pt-2">
+        {activeTab === 'story' && <StoryView tripId={plan.id} story={plan.story} onRegenerate={handleStoryRegen} readOnly={readOnly} />}
+        {activeTab === 'itinerary' && <ItineraryView itinerary={plan.itinerary} />}
+        {activeTab === 'budget' && <BudgetView budget={plan.budget} />}
+        {activeTab === 'memories' && <PostTripStory destination={plan.destination} itinerary={plan.itinerary} />}
+      </div>
+    </>
+  );
 
   return (
     <div className="app-shell flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950">
@@ -176,9 +268,14 @@ export default function App() {
           DreamTrail AI
         </span>
         {stage !== 'welcome' && stage !== 'landing' && (
-          <button onClick={handlePlanAnother} className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg hover:border-slate-700 transition focus:outline-none focus:ring-2 focus:ring-emerald-400">
-            Plan Another Trail
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={handlePlanAnother} className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg hover:border-slate-700 transition focus:outline-none focus:ring-2 focus:ring-emerald-400">
+              Plan Another Trail
+            </button>
+            <button onClick={handleShowSavedTrips} className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg hover:border-slate-700 transition focus:outline-none focus:ring-2 focus:ring-emerald-400">
+              Saved Trips
+            </button>
+          </div>
         )}
       </header>
 
@@ -190,7 +287,6 @@ export default function App() {
           </div>
         )}
 
-        {/* 0. WELCOME — display name only, not authentication (FR-08) */}
         {stage === 'welcome' && (
           <WelcomeScreen initialName={displayName} onContinue={handleWelcomeContinue} />
         )}
@@ -336,6 +432,59 @@ export default function App() {
                 )
               )}
             </div>
+          </div>
+        )}
+
+        {stage === 'saved-trips' && (
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-3xl font-extrabold text-slate-100">Saved Trips</h1>
+              <p className="mt-1 text-sm text-slate-400">Your latest trail appears first. Select a trip to view it without leaving this page.</p>
+            </div>
+
+            {savedTrips.length === 0 ? (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/20 p-8 text-center text-slate-400">
+                No trips saved yet. Create a trail to add it here.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-6 md:flex-row">
+                <div className="flex shrink-0 gap-2 overflow-x-auto md:w-72 md:flex-col md:overflow-visible" role="tablist" aria-orientation="vertical">
+                  {savedTrips.map((savedTrip, index) => (
+                    <button
+                      key={savedTrip.id}
+                      role="tab"
+                      aria-selected={selectedSavedTripId === savedTrip.id}
+                      onClick={() => {
+                        setSelectedSavedTripId(savedTrip.id);
+                        setActiveTab('story');
+                      }}
+                      className={`min-w-52 rounded-xl border p-4 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-400 md:min-w-0 ${selectedSavedTripId === savedTrip.id ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-slate-800 bg-slate-900/30 text-slate-300 hover:border-slate-700'}`}
+                    >
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">{index === 0 ? 'Latest plan' : `Saved plan ${savedTrips.length - index}`}</span>
+                      <span className="block font-semibold">{savedTrip.plan.destination.name}, {savedTrip.plan.destination.country}</span>
+                      <span className="mt-1 block text-xs text-slate-500">{savedTrip.plan.story.title}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {(() => {
+                  const selectedTrip = savedTrips.find(savedTrip => savedTrip.id === selectedSavedTripId) ?? savedTrips[0];
+                  return (
+                    <div className="min-w-0 flex-1 space-y-6">
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/20 p-6">
+                        <h2 className="text-3xl font-extrabold text-slate-100">{selectedTrip.plan.destination.name}, {selectedTrip.plan.destination.country}</h2>
+                        <p className="mt-1 text-sm text-slate-400">{selectedTrip.plan.destination.rationale}</p>
+                        <span className="mt-2 inline-block rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
+                          All costs are estimates · {selectedTrip.plan.generation_mode} mode
+                        </span>
+                      </div>
+                      <PreferenceSummaryCard summary={selectedTrip.plan.preference_summary} />
+                      {renderPlanTabs(selectedTrip.plan, true)}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
       </main>
