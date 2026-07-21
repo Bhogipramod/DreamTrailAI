@@ -1,8 +1,10 @@
-# MemoryTrip
+# DreamTrail AI
+
+DreamTrail AI turns an emotion-led travel wish into a destination recommendation, day-by-day itinerary, budget, and memory-led story — powered by Google Gemini.
 
 > **Plan the journey your heart remembers.**
 
-MemoryTrip is an emotion-first travel planning experience. Instead of asking users to choose a destination first, it starts with the memory they want to create: a quiet reset, a romantic celebration, an adventurous road trip, or a photography-led escape. It turns that intention into a destination recommendation, a practical day-by-day itinerary, a transparent budget, and a memory-led pre-trip story.
+DreamTrail AI is an emotion-first travel planning experience. Instead of asking users to choose a destination first, it starts with the memory they want to create: a quiet reset, a romantic celebration, an adventurous road trip, or a photography-led escape. It turns that intention into a destination recommendation, a practical day-by-day itinerary, a transparent budget, and a memory-led pre-trip story — then lets the traveller revisit it after the trip and turn their own photos and notes into a post-trip story.
 
 ## Hackathon submission summary
 
@@ -10,83 +12,106 @@ MemoryTrip is an emotion-first travel planning experience. Instead of asking use
 
 **Project description:**
 
-MemoryTrip reframes travel planning as an act of storytelling. Users share what they want their journey to feel like, along with practical constraints such as origin, duration, budget, group size, pace, interests, and an optional country/state/destination scope. The application interprets this brief, recommends a fitting destination, builds a paced itinerary, estimates a category-based budget, suggests savings when needed, and writes a personal pre-trip story in the user’s chosen style.
+DreamTrail AI reframes travel planning as an act of storytelling. Users share what they want their journey to feel like, along with practical constraints such as origin, duration, budget, group size, pace, interests, and an optional country/state/destination scope. Google Gemini interprets this brief, recommends a fitting destination, builds a paced itinerary, estimates a category-based budget, suggests savings when needed, and writes a personal pre-trip story in the user's chosen style. After the trip, the traveller can add their own day-by-day photos and captions and have the same AI weave them into a labelled retrospective story.
 
-The MVP deliberately prioritises a cohesive planning experience over booking logistics. All travel costs are labelled as estimates; the app does not claim live availability or confirmed bookings.
+The MVP deliberately prioritises a cohesive planning experience over booking logistics. All travel costs are labelled as estimates; the app does not claim live availability or confirmed bookings, and every AI-written story is clearly labelled as inspirational/retrospective rather than a verified account of real events.
+
+## Why MemoryTrip
+
+Most trip planners start from a destination. MemoryTrip starts from a feeling — the traveller describes the *experience* they want, and the AI works backward to a destination, itinerary, and budget that fit it. Every recommendation carries a stated rationale, every cost is labelled as an estimate, and every generated story is clearly marked as inspirational rather than fact, so the experience stays honest even as it stays personal.
 
 ## Features
 
-- Emotion-led travel prompt: “What story do you want to live?”
+- Emotion-led travel prompt: "What story do you want to live?"
 - Optional destination scope: users can leave the destination open or specify a country, state, region, or city.
-- Personalised destination recommendation and rationale.
+- AI-personalised destination recommendation and rationale.
 - Daily itinerary with morning, afternoon, and evening activities.
 - Suggested memory/photo moments and rationale for each activity.
 - Category-based budget: accommodation, food, transport, activities, and emergency reserve.
-- Practical optimisation suggestions when a plan exceeds the user’s budget.
+- Practical optimisation suggestions when a plan exceeds the user's budget.
 - Five story styles: cinematic, fantasy, watercolor, documentary, and animation.
-- Revision actions: reduce budget, slow down the pace, add adventure/culture, change destination, or provide a free-text instruction.
-- Session-based persistence: the current plan is restored during the active browser session; no database or user account is required for MVP1.
+- Revision actions: reduce budget, slow down the pace, add adventure/culture, change destination, or provide a free-text instruction — the AI regenerates the affected plan.
+- **Post-trip memory story:** after the trip, the traveller can attach photos and captions to each itinerary day, optionally let the AI actually look at a capped number of photos, and generate a labelled retrospective story from their own material.
+- **Saved trips:** each generated plan can be kept for the active session; a dedicated view lists saved trips and lets the traveller reopen any of them without regenerating.
+- Session-based persistence: the current plan and saved trips are restored via browser `sessionStorage` during the active session; no database or user account is required for MVP1.
 
 ## Demo flow
 
-1. Enter a display name, origin, travel wish, duration, budget, pace, and interests.
-2. Optionally limit recommendations to a country, state, region, or destination.
-3. Generate the MemoryTrip plan.
+1. Enter a display name (not an account — nothing is sent anywhere beyond this session).
+2. Share your travel wish, origin, duration, budget, pace, and interests, and optionally narrow the destination to a country/state/region.
+3. Generate the plan — Gemini produces the preference summary, destination, itinerary, budget, and story in one request.
 4. Review the emotional intent, recommended destination, itinerary, and budget.
-5. Revise the plan with a quick action or custom request.
-6. Read the memory-led pre-trip story.
+5. Revise the plan with a quick action (lower budget, slower pace, more culture, etc.) or a custom free-text request.
+6. Read the memory-led pre-trip story, and switch its style on demand.
+7. After the trip, add photos/captions per day under **Post-Trip Memories** and generate a retrospective story.
+8. Save the trip and start another — reopen any saved trip later from **Saved Trips**.
 
 ## Technology
 
 | Layer | Technology | Purpose |
 | --- | --- | --- |
-| Frontend | React, TypeScript, Vite | Responsive interactive travel-planning UI. |
-| Backend | Python, FastAPI, Pydantic | Typed API, validation, orchestration boundary. |
-| Persistence | `sessionStorage` | Retains the active trip through a browser refresh. |
-| Development provider | Deterministic mock provider | Supports UI/API development without an API key. |
-| Final AI provider | OpenAI Responses API + GPT-5.6 | Generates the live preference profile, itinerary, budget, and story. |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS | Responsive interactive travel-planning UI. |
+| Backend | Python, FastAPI, Pydantic | Typed API, request validation, AI orchestration boundary. |
+| AI | Google Gemini, via the `google-genai` SDK | Generates the preference profile, destination, itinerary, budget, story, and post-trip story. Structured JSON output is validated straight into the app's Pydantic models, so the model can never return anything that doesn't match the shared contract. |
+| Persistence | Browser `sessionStorage` | Retains the active plan and saved trips through a browser refresh, for the active session only. |
 
 ## Architecture
 
 ```text
 React / Vite frontend
         |
-        | POST /api/trips/generate or /api/trips/revise
+        | POST /api/trips/generate | /revise | /story | /post-story
         v
-FastAPI backend
+FastAPI backend (app/main.py)
         |
         v
-Trip provider boundary
-   |                    |
-MockTripProvider   OpenAITripProvider (final demo)
+AI provider interface (app/services/trip_provider.py)
         |
         v
-Validated TripPlan JSON
+Google Gemini — structured JSON output
+        |
+        v
+Validated TripPlan / Story JSON (Pydantic)
         |
         v
 Itinerary, budget, revisions, and story UI
 ```
 
-The provider boundary keeps the frontend independent of the AI implementation. During development, `MockTripProvider` returns realistic input-sensitive plans. For the final submission, `OpenAITripProvider` will call GPT-5.6 server-side and return the same validated response shape.
+The AI call sits behind a single, well-defined interface, so the frontend never depends on model-specific details — it only reads the validated `TripPlan` / `Story` response. That boundary also keeps the API key and every prompt entirely server-side; nothing AI-related is ever sent to the browser.
 
 ## Project structure
 
 ```text
-MemoryTrip/
-├── frontend/                   # React + TypeScript + Vite application
+DreamTrail AI/
+├── frontend/                          # React + TypeScript + Vite application
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── tailwind.config.js / postcss.config.js
 │   └── src/
-│       ├── App.tsx             # Form, loading states, results, revisions
-│       ├── api.ts              # FastAPI client
-│       ├── types.ts            # Shared client-side contract
-│       └── styles.css          # Responsive visual design
+│       ├── App.tsx                    # Screens, tabs, revisions, saved trips, session persistence
+│       ├── api.ts                     # FastAPI client (generate / revise / story / post-story)
+│       ├── types.ts                   # Shared client-side contract
+│       ├── imageUtils.ts              # Client-side photo resize before sending to Gemini
+│       ├── styles.css                 # Visual design
+│       └── Components/
+│           ├── WelcomeScreen.tsx
+│           ├── TripForm.tsx
+│           ├── PreferenceSummaryCard.tsx
+│           ├── ItineraryView.tsx
+│           ├── BudgetView.tsx
+│           ├── StoryView.tsx
+│           └── PostTripStory.tsx
 ├── backend/
 │   ├── app/
-│   │   ├── main.py             # FastAPI routes and CORS
-│   │   ├── models.py           # Pydantic request/response models
+│   │   ├── main.py                    # FastAPI routes, CORS, error handling
+│   │   ├── models.py                  # Pydantic request/response models (the shared contract)
 │   │   └── services/
-│   │       └── trip_provider.py # Mock provider; GPT-5.6 extension point
+│   │       └── trip_provider.py       # Gemini integration and generation logic
+│   ├── tests/
+│   │   └── test_trip_api.py           # Schema validation and over-budget optimisation tests
+│   ├── list_models.py                 # Lists Gemini models available to your API key
 │   ├── requirements.txt
-│   └── .env.example
+│   └── .env                           # Not committed — see setup below
 ├── BUSINESS_REQUIREMENTS.md
 └── DEVELOPER_PLAN.md
 ```
@@ -95,79 +120,102 @@ MemoryTrip/
 
 ### Prerequisites
 
-- Node.js 20 LTS or newer (required by React/Vite tooling)
-- Python 3.11 or newer
+- **Node.js 20 LTS or newer**
+- **Python 3.11+**
+- A **Gemini API key** (from Google AI Studio)
 
-### Backend
+### 1. Backend
 
-```powershell
+```bash
 cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+Create `backend/.env` (this file is git-ignored and never committed):
+
+```properties
+GEMINI_API_KEY=your-gemini-api-key-here
+GEMINI_MODEL=gemini-3.1-flash-lite   # optional; overrides the default model
+```
+
+Start the API:
+
+```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Visit `http://localhost:8000/docs` for interactive API documentation.
+The API will be available at `http://localhost:8000`; visit `http://localhost:8000/docs` for interactive API documentation. Confirm it's up:
 
-### Frontend
+```bash
+curl http://localhost:8000/api/health
+# {"status":"ok","provider":"gemini"}
+```
+
+Run the backend tests:
+
+```bash
+pytest tests/ -v
+```
+
+### 2. Frontend
 
 In a separate terminal:
 
-```powershell
+```bash
 cd frontend
 npm install
+```
+
+By default the frontend talks to `http://localhost:8000`. To point it elsewhere, create `frontend/.env`:
+
+```properties
+VITE_API_URL=http://localhost:8000
+```
+
+Start the dev server:
+
+```bash
 npm run dev
 ```
 
 Open the Vite URL shown in the terminal, normally `http://localhost:5173`.
 
-### Environment variables
-
-Copy `backend/.env.example` to `backend/.env` when enabling the live AI provider. Never commit that file.
-
-```text
-TRIP_PROVIDER=mock
-OPENAI_API_KEY=
-```
-
 ## API endpoints
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | API health/provider status. |
+| `GET` | `/api/health` | API health check. |
 | `POST` | `/api/trips/generate` | Creates a complete travel plan from user preferences. |
-| `POST` | `/api/trips/revise` | Re-generates a plan after a revision instruction. |
+| `POST` | `/api/trips/revise` | Re-generates a plan after a revision instruction, resending the original request (the backend is stateless). |
+| `POST` | `/api/trips/story` | Regenerates only the story for an existing plan, in a chosen style. |
+| `POST` | `/api/trips/post-story` | Weaves the traveller's own day-by-day captions (and optional photos) into a labelled post-trip story. |
 
-## Codex collaboration story
+## Built with AI-assisted development
 
-Codex was used as an active engineering collaborator throughout the project’s early development. Its contribution was not a single code-generation request; it helped shape the product and establish a buildable technical path.
+Two different AI tools were part of this project, doing two different jobs — one during development, one at runtime for the live product.
 
-1. **Requirements analysis:** Codex reviewed the original DreamTrail concept document and translated it into a developer-ready MVP specification. This clarified the user flow, mandatory inputs, budget rules, acceptance criteria, exclusions, and hackathon priorities.
-2. **Product decisions:** Together, we reduced scope to a session-only MVP: no database, booking, live pricing, or real authentication. This protected time for the differentiated emotion-to-itinerary-to-story experience.
-3. **Architecture:** Codex proposed the React/Vite + FastAPI split and a provider boundary so mock data could unblock development while preserving a clean path to GPT-5.6.
-4. **Implementation:** Codex scaffolded the local frontend and backend, created typed Pydantic/TypeScript contracts, implemented the mock trip generator, added API routes, browser-session persistence, revision controls, loading/error states, and the responsive results experience.
-5. **Quality and handoff:** Codex created the business requirements, two-developer plan, API contract, setup guide, and a static Python syntax check.
+**Codex and GPT — used to build the app:**
 
-This collaboration allowed the team to spend its early hackathon time refining the travel experience rather than repeatedly rebuilding foundations.
+- **Requirements analysis:** translated the initial concept into a developer-ready MVP specification — user flow, mandatory inputs, budget rules, acceptance criteria, and scope boundaries.
+- **Product decisions:** helped scope the MVP to a session-only experience (no database, booking, live pricing, or full authentication), protecting time for the core emotion-to-itinerary-to-story experience.
+- **Architecture:** proposed the React/Vite + FastAPI split and a clean AI-orchestration boundary that keeps the frontend independent of the model implementation.
+- **Implementation:** scaffolded the frontend and backend, built typed Pydantic/TypeScript contracts, implemented API routes, browser-session persistence, revision controls, loading/error states, and the responsive results UI.
+- **Debugging and review:** used for code review passes, catching integration bugs (mismatched function signatures, invalid enum usage) and tightening error handling.
+- **Quality and handoff:** produced the business requirements, developer plan, and API contract documentation.
 
-## GPT-5.6 integration status and final-demo plan
+**Google Gemini — powers the live app:**
 
-**Current repository status:** the application is intentionally in `mock` mode. The mock provider exists so the full user experience can be developed and tested before API billing is enabled. GPT-5.6 must be enabled before submitting this project; it must not be claimed as live until that integration is complete.
+Trip generation itself — the destination recommendation, itinerary, budget, and story writing the user actually sees at runtime — is powered by **Google Gemini** via the `google-genai` SDK, called server-side so the API key and prompts never reach the browser.
 
-For the final demo, the FastAPI backend will use the OpenAI Responses API with GPT-5.6 to perform four visible stages:
+## Known limitations
 
-1. **Emotion profile:** convert the travel wish into intent, themes, travel style, pace, and constraints.
-2. **Itinerary generation:** recommend a destination and structured daily plan that respects the selected scope and duration.
-3. **Budget reasoning:** estimate categories, compare them with the user’s budget, and propose trade-offs.
-4. **Memory-led story:** write an inspirational pre-trip narrative based only on the approved trip plan and selected style.
-
-The response will be validated against the existing `TripPlan` schema before it is sent to the frontend. The OpenAI API key will remain on the server in an environment variable and will never be sent to the browser.
-
+- The generation-progress UI ("Understanding your mood → Designing your trail → Balancing your budget → Writing your story") is a fixed client-side sequence rather than a live trace of separate backend stages.
+- Accommodation preference and accessibility-needs fields described in `BUSINESS_REQUIREMENTS.md` (FR-01) are not yet present in the intake form.
+- All costs, availability, and story content are AI-generated estimates, not sourced from live travel data — this is called out in the UI and in every story's disclaimer.
 
 ## Development documentation
 
 - [Business requirements](BUSINESS_REQUIREMENTS.md)
 - [Two-developer MVP1 plan](DEVELOPER_PLAN.md)
-
-

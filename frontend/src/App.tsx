@@ -253,7 +253,15 @@ export default function App() {
         {activeTab === 'story' && <StoryView tripId={plan.id} story={plan.story} onRegenerate={handleStoryRegen} readOnly={readOnly} />}
         {activeTab === 'itinerary' && <ItineraryView itinerary={plan.itinerary} />}
         {activeTab === 'budget' && <BudgetView budget={plan.budget} />}
-        {activeTab === 'memories' && <PostTripStory destination={plan.destination} itinerary={plan.itinerary} />}
+        {activeTab === 'memories' && (
+                lastRequest ? (
+                  <PostTripStory destination={plan.destination} itinerary={plan.itinerary} tripRequest={lastRequest} />
+                ) : (
+                  <p className="text-sm text-slate-500 text-center py-12">
+                    Your trip details aren't available right now — try generating a new plan.
+                  </p>
+                )
+              )}
       </div>
     </>
   );
