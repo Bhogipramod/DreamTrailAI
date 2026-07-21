@@ -72,10 +72,8 @@ def generate_trip(request: TripRequest) -> TripPlan:
 
 @app.post("/api/trips/revise", response_model=TripPlan)
 def revise_trip(request: RevisionRequest) -> TripPlan:
-    try:
-        return get_trip_provider().revise_trip(request.trip, request.instruction)
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    return _call_provider(lambda: get_trip_provider().revise_trip(request.trip, request.instruction))
 
 
 @app.post("/api/trips/story", response_model=Story)

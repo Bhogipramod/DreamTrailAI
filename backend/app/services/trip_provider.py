@@ -27,18 +27,15 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from dotenv import load_dotenv
 from pathlib import Path
+from typing import List
 
-import os
-from functools import lru_cache
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-
 load_dotenv(env_path)
-from typing import List
 
 from app.models import (
     BudgetLineItem,
@@ -67,6 +64,10 @@ class TripProvider(ABC):
 
     @abstractmethod
     def generate(self, request: TripRequest) -> TripPlan:
+        ...
+
+    @abstractmethod
+    def revise_trip(self, request: TripRequest, instruction: str) -> TripPlan:
         ...
 
     @abstractmethod
@@ -203,7 +204,7 @@ def _themes_for(request: TripRequest) -> list[str]:
         Pace.BALANCED: "balanced exploration",
         Pace.PACKED: "high-energy discovery",
     }[request.pace])
-    
+
     seen = []
     for t in themes:
         if t not in seen:
@@ -277,7 +278,7 @@ def _build_itinerary(request: TripRequest, destination: Destination) -> list[Iti
 
 def _build_budget(request: TripRequest, itinerary: list[ItineraryDay]) -> BudgetPlan:
     estimated_total = sum(day.estimated_daily_cost for day in itinerary)
-    
+
     line_items = [
         BudgetLineItem(category=name, amount=round(estimated_total * weight))
         for name, weight in _BUDGET_CATEGORY_WEIGHTS
@@ -368,12 +369,7 @@ class MockTripProvider(TripProvider):
         preferences = _build_preferences(request)
         return _build_story(destination, preferences, style)
 
-    def revise_trip(
-        self,
-        request: TripRequest,
-        current_plan: TripPlan,
-        instruction: str,
-        ) -> TripPlan:
+    def revise_trip(self, request: TripRequest, instruction: str) -> TripPlan:
         """
         Mock revision by tweaking the original request based on a few
         common revision instructions, then regenerating the trip.
@@ -386,11 +382,13 @@ class MockTripProvider(TripProvider):
         if "budget" in text or "cheap" in text:
             revised_request.budget = max(100, int(revised_request.budget * 0.8))
 
+        # NOTE: Pace enum members are RELAXED / BALANCED / PACKED (uppercase
+        # names, lowercase string values) - there is no Pace.active.
         if "slower" in text or "relaxed" in text:
-            revised_request.pace = Pace.relaxed
+            revised_request.pace = Pace.RELAXED
 
         if "faster" in text or "active" in text:
-            revised_request.pace = Pace.active
+            revised_request.pace = Pace.PACKED
 
         if "culture" in text and "culture" not in revised_request.interests:
             revised_request.interests.append("culture")
@@ -402,6 +400,7 @@ class MockTripProvider(TripProvider):
             revised_request.interests.append("food")
 
         return self.generate(revised_request)
+
     def generate_post_trip_story(
         self,
         request: TripRequest,
@@ -444,10 +443,13 @@ class MockTripProvider(TripProvider):
 
 
 # --------------------------------------------------------------------------
-# AI trip provider 
+# Gemini-backed provider
 # --------------------------------------------------------------------------
 
-MODEL_TARGET = "gemini-3.5-flash"
+# Was previously hardcoded and ignored the GEMINI_MODEL env var mentioned in
+# the module docstring; now actually reads it, falling back to the same
+# default as before.
+MODEL_TARGET = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
 
 class GeminiTripProvider(TripProvider):
@@ -563,10 +565,10 @@ class GeminiTripProvider(TripProvider):
                 response_schema=Story,
             ),
         )
-        
+
         return Story.model_validate_json(response.text)
 
-    def revise_trip(self,request: TripRequest,instruction: str,) -> TripPlan:
+    def revise_trip(self, request: TripRequest, instruction: str) -> TripPlan:
         """
         Revises an existing trip request according to the user's instruction
         and generates a new TripPlan.
@@ -624,16 +626,77 @@ class GeminiTripProvider(TripProvider):
 
         plan = TripPlan.model_validate_json(response.text)
 
-    
         if hasattr(plan, "generation_mode"):
             plan.generation_mode = self.generation_mode
 
         return plan
 
+    def generate_post_trip_story(
+        self,
+        request: TripRequest,
+        day_notes: List[DayNote],
+        extra_notes: List[str],
+        extra_photos: List[PhotoPayload],
+        style: StoryStyle,
+    ) -> Story:
+        """Weaves day-by-day captions (and, when provided, actual photo
+        bytes) into one retrospective story using Gemini's vision input."""
+
+        notes_text = "\n".join(
+            f"Day {note.day} ({note.theme}): {note.caption}"
+            for note in sorted(day_notes, key=lambda n: n.day)
+            if note.caption.strip()
+        )
+        extras_text = "\n".join(n for n in extra_notes if n.strip())
+
+        prompt = f"""
+        You are an expert travel storyteller writing a retrospective,
+        post-trip story for {request.display_name}'s journey to
+        {request.destination_scope or "their destination"}.
+
+        Use only the traveller's own notes below - do not invent events,
+        locations, or details they did not mention.
+
+        Day-by-day notes:
+        {notes_text or "(none provided)"}
+
+        Additional notes:
+        {extras_text or "(none provided)"}
+
+        Write in the "{style}" style. Return ONLY valid JSON matching the
+        Story schema (style, title, content, disclaimer). The disclaimer
+        must state this was written from the traveller's own photos and
+        captions and is not independently verified.
+        """
+
+        # Vision-capable path: include actual image bytes so Gemini can
+        # describe what's really in the photos, not just the captions.
+        contents: list = [prompt]
+        for note in day_notes:
+            for photo in note.photos:
+                contents.append(
+                    types.Part.from_bytes(data=photo.data.encode(), mime_type=photo.mime_type)
+                )
+        for photo in extra_photos:
+            contents.append(
+                types.Part.from_bytes(data=photo.data.encode(), mime_type=photo.mime_type)
+            )
+
+        response = self._client.models.generate_content(
+            model=MODEL_TARGET,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=Story,
+            ),
+        )
+
+        return Story.model_validate_json(response.text)
+
+
 @lru_cache
 def get_trip_provider() -> TripProvider:
-    print(os.getenv("AI_PROVIDER","mock"))
-    provider_name = os.getenv("AI_PROVIDER").strip().lower()
+    provider_name = os.getenv("AI_PROVIDER", "mock").strip().lower()
 
     if provider_name == "gemini":
         logger.info("Using GeminiTripProvider (%s)", MODEL_TARGET)
