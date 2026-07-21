@@ -8,7 +8,7 @@ DreamTrail AI is an emotion-first travel planning experience. Instead of asking 
 
 ## Hackathon submission summary
 
-**Category:** Select the category that best matches the final hackathon submission.
+**Category:** Apps for life
 
 **Project description:**
 
